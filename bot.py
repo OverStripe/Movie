@@ -1,5 +1,5 @@
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from moviepy.video.VideoClip import TextClip
 from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
@@ -7,7 +7,7 @@ import os
 import threading
 from datetime import datetime
 
-# Define a function to split and process the video
+# Define a function to process and split the video
 def process_video(file_path, output_dir, clip_duration=60, watermark="@Philo.Cinemas", target_aspect_ratio=(9, 16)):
     try:
         clip = VideoFileClip(file_path)
@@ -20,13 +20,13 @@ def process_video(file_path, output_dir, clip_duration=60, watermark="@Philo.Cin
             subclip = clip.subclip(start, end)
 
             # Resize video to 9:16 format
-            width, height = clip.size
+            width, height = subclip.size
             target_width = width
             target_height = int((target_width / target_aspect_ratio[0]) * target_aspect_ratio[1])
             resized_clip = subclip.resize(height=target_height)
 
             # Add watermark
-            watermark_clip = TextClip(watermark, fontsize=50, color='white')
+            watermark_clip = TextClip(watermark, fontsize=50, color='white', bg_color='black', font='Arial')
             watermark_clip = watermark_clip.set_position(("center", "bottom")).set_duration(resized_clip.duration)
 
             # Combine watermark with video
@@ -42,7 +42,7 @@ def process_video(file_path, output_dir, clip_duration=60, watermark="@Philo.Cin
         print(f"Error processing video: {e}")
         return []
 
-# Function to delete files after 1 day
+# Function to delete files after 24 hours
 def schedule_deletion(directory):
     def delete_files():
         print(f"Deleting files in {directory}...")
@@ -60,55 +60,53 @@ def schedule_deletion(directory):
     timer.start()
 
 # Start command handler
-def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Welcome! Send me a video file, and I will split it into 1-minute vertical parts with watermark (e.g., Part 1, Part 2, etc.). Files will be deleted after 1 day.")
+async def start(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text("Welcome! Send me a video file, and I will split it into 1-minute vertical parts with watermark (e.g., Part 1, Part 2, etc.). Files will be deleted after 1 day.")
 
 # Video file handler
-def video_handler(update: Update, context: CallbackContext) -> None:
+async def video_handler(update: Update, context: CallbackContext) -> None:
     file = update.message.video or update.message.document
     if file:
-        update.message.reply_text("Processing your video. Please wait...")
+        await update.message.reply_text("Processing your video. Please wait...")
         file_path = f"{file.file_id}.mp4"
         output_dir = f"output_{file.file_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        
+
         # Download the video
-        video = context.bot.get_file(file.file_id)
-        video.download(file_path)
+        video = await context.bot.get_file(file.file_id)
+        await video.download_to_drive(file_path)
         
         # Process the video
         clips = process_video(file_path, output_dir)
         
         if clips:
-            update.message.reply_text("Uploading the clips as parts...")
+            await update.message.reply_text("Uploading the clips as parts...")
             for i, clip in enumerate(clips, start=1):
                 part_name = f"Part {i}"
-                context.bot.send_video(chat_id=update.effective_chat.id, video=open(clip, "rb"), caption=part_name)
+                await context.bot.send_video(chat_id=update.effective_chat.id, video=open(clip, "rb"), caption=part_name)
                 os.remove(clip)  # Remove the clip after sending
             
             # Schedule deletion of the output directory
             schedule_deletion(output_dir)
         else:
-            update.message.reply_text("Sorry, something went wrong while processing the video.")
+            await update.message.reply_text("Sorry, something went wrong while processing the video.")
         
         # Remove the original file
         os.remove(file_path)
     else:
-        update.message.reply_text("Please send me a valid video file.")
+        await update.message.reply_text("Please send me a valid video file.")
 
 # Main function
 def main():
     # Replace 'YOUR_BOT_TOKEN' with your actual bot token from BotFather
     TOKEN = "7294757894:AAFtGulgOEpcXAQIGCgP_StFE02mhovnG9c"
-    updater = Updater(TOKEN)
+    application = Application.builder().token(TOKEN).build()
 
-    dispatcher = updater.dispatcher
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(Filters.video | Filters.document, video_handler))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_handler))
 
     # Start the bot
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
-      
+    
